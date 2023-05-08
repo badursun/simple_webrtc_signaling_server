@@ -13,9 +13,8 @@
         "client2": "nodemon ./examples/example-client2.js"
     },
     "dependencies": {
+        "express": "~4.17.1",
         "cors": "^2.8.5",
-        "express": "^4.17.1",
-        "sirv": "^1.0.5",
         "socket.io": "^4.0.1",
         "socket.io-client": "^4.0.1",
         "env-cmd": "^10.1.0"

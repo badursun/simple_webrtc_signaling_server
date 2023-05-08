@@ -1,7 +1,4 @@
-// IMPORRTS
 const http = require("http");
-const express = require("express");
-const socketio = require("socket.io");
 const cors = require("cors");
 const sirv = require("sirv");
 
@@ -10,11 +7,17 @@ const PORT = process.env.PORT || 3030;
 const DEV = process.env.NODE_ENV === "development";
 const TOKEN = process.env.TOKEN;
 
-// SETUP SERVERS
+// Setup basic express server
+const express = require('express');
 const app = express();
-app.use(express.json(), cors());
-const server = http.createServer(app);
-const io = socketio(server, { cors: {} });
+const path = require('path');
+const server = require('http').createServer(app);
+const io = require('socket.io')(server);
+const port = process.env.PORT || 3000;
+
+server.listen(port, () => {
+    console.log('Server listening at port %d', port);
+});
 
 // AUTHENTICATION MIDDLEWARE
 io.use((socket, next) => {
@@ -26,73 +29,66 @@ io.use((socket, next) => {
     }
 });
 
-// API ENDPOINT TO DISPLAY THE CONNECTION TO THE SIGNALING SERVER
-let connections = {};
-app.get("/connections", (req, res) => {
-    res.json(Object.values(connections));
+// Routing
+app.use(express.static(path.join(__dirname, 'public')));
+
+// Chatroom
+let numUsers = 0;
+
+io.on('connection', (socket) => {
+    let addedUser = false;
+
+    // when the client emits 'new message', this listens and executes
+    socket.on('new message', (data) => {
+        // we tell the client to execute 'new message'
+        socket.broadcast.emit('new message', {
+            username: socket.username,
+            message: data
+        });
+    });
+
+    // when the client emits 'add user', this listens and executes
+    socket.on('add user', (username) => {
+        if (addedUser) return;
+
+        // we store the username in the socket session for this client
+        socket.username = username;
+        ++numUsers;
+        addedUser = true;
+        socket.emit('login', {
+            numUsers: numUsers
+        });
+        // echo globally (all clients) that a person has connected
+        socket.broadcast.emit('user joined', {
+            username: socket.username,
+            numUsers: numUsers
+        });
+    });
+
+    // when the client emits 'typing', we broadcast it to others
+    socket.on('typing', () => {
+        socket.broadcast.emit('typing', {
+            username: socket.username
+        });
+    });
+
+    // when the client emits 'stop typing', we broadcast it to others
+    socket.on('stop typing', () => {
+        socket.broadcast.emit('stop typing', {
+            username: socket.username
+        });
+    });
+
+    // when the user disconnects.. perform this
+    socket.on('disconnect', () => {
+        if (addedUser) {
+            --numUsers;
+
+            // echo globally that this client has left
+            socket.broadcast.emit('user left', {
+                username: socket.username,
+                numUsers: numUsers
+            });
+        }
+    });
 });
-
-// MESSAGING LOGIC
-io.on("connection", (socket) => {
-    console.log("User connected with id", socket.id);
-
-    socket.on("ready", (peerId, peerType) => {
-        // Make sure that the hostname is unique, if the hostname is already in connections, send an error and disconnect
-        if (peerId in connections) {
-            socket.emit("uniquenessError", {
-                message: `${peerId} is already connected to the signalling server. Please change your peer ID and try again.`,
-            });
-            socket.disconnect(true);
-        } else {
-            console.log(`Added ${peerId} to connections`);
-            // Let new peer know about all exisiting peers
-            socket.send({ from: "all", target: peerId, payload: { action: "open", connections: Object.values(connections), bePolite: false } }); // The new peer doesn't need to be polite.
-            // Create new peer
-            const newPeer = { socketId: socket.id, peerId, peerType };
-            // Updates connections object
-            connections[peerId] = newPeer;
-            // Let all other peers know about new peer
-            socket.broadcast.emit("message", {
-                from: peerId,
-                target: "all",
-                payload: { action: "open", connections: [newPeer], bePolite: true }, // send connections object with an array containing the only new peer and make all exisiting peers polite.
-            });
-        }
-    });
-    socket.on("message", (message) => {
-        // Send message to all peers expect the sender
-        socket.broadcast.emit("message", message);
-    });
-    socket.on("messageOne", (message) => {
-        // Send message to a specific targeted peer
-        const { target } = message;
-        const targetPeer = connections[target];
-        if (targetPeer) {
-            io.to(targetPeer.socketId).emit("message", { ...message });
-        } else {
-            console.log(`Target ${target} not found`);
-        }
-    });
-    socket.on("disconnect", () => {
-        const disconnectingPeer = Object.values(connections).find((peer) => peer.socketId === socket.id);
-        if (disconnectingPeer) {
-            console.log("Disconnected", socket.id, "with peerId", disconnectingPeer.peerId);
-            // Make all peers close their peer channels
-            socket.broadcast.emit("message", {
-                from: disconnectingPeer.peerId,
-                target: "all",
-                payload: { action: "close", message: "Peer has left the signaling server" },
-            });
-            // remove disconnecting peer from connections
-            delete connections[disconnectingPeer.peerId];
-        } else {
-            console.log(socket.id, "has disconnected");
-        }
-    });
-});
-
-// SERVE STATIC FILES
-app.use(sirv("public", { DEV }));
-
-// RUN APP
-server.listen(PORT, console.log(`Listening on PORT ${PORT}`));
